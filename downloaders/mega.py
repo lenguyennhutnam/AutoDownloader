@@ -6,16 +6,15 @@ Cross-platform: finds mega-get binary with shutil.which().
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from .base import BaseDownloader
+from utils.settings import settings
 
 _MEGA_RE = re.compile(
     r"https?://mega\.nz/(file|folder)/[^\s\"'<>]+", re.IGNORECASE
 )
-
-# Connection timeout for subprocess (seconds)
-_TIMEOUT_SECONDS = 600  # 10 minutes — MEGA files can be large
 
 
 def _find_mega_get() -> str | None:
@@ -59,8 +58,7 @@ def _ensure_mega_server() -> None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        import time
-        time.sleep(3)
+        time.sleep(settings["Mega"]["ServerStartupWaitSeconds"])
     except Exception:
         pass
 
@@ -138,7 +136,7 @@ class MegaDownloader(BaseDownloader):
         except subprocess.TimeoutExpired:
             process.kill()
             self._cleanup_partial(output_dir, before)
-            return False, f"Timed out after {_TIMEOUT_SECONDS}s"
+            return False, f"Timed out after {settings['Mega']['TimeoutSeconds']}s"
         except Exception as e:
             self._cleanup_partial(output_dir, before)
             return False, f"Download error: {e}"

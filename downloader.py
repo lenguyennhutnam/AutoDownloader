@@ -5,6 +5,7 @@ Downloads files from a text file containing GoFile, MEGA, and Google Drive links
 Each link is processed sequentially with pre-download validation.
 
 Usage:
+    python downloader.py
     python downloader.py links.txt
     python downloader.py links.txt --output ./downloads
     python downloader.py links.txt -o E:\\my_downloads --retries 5
@@ -18,9 +19,7 @@ from pathlib import Path
 from downloaders import get_downloader
 from utils import logger
 from utils.link_parser import parse_links_file
-
-DEFAULT_OUTPUT = Path("./downloads")
-DEFAULT_RETRIES = 3
+from utils.settings import settings
 
 
 def resolve_output_path(url: str, output_dir: Path) -> Path:
@@ -62,9 +61,10 @@ def process_link(url: str, index: int, total: int, output_dir: Path, retries: in
 
     # 3. Download with retries
     link_output = resolve_output_path(url, output_dir)
+    retry_delay: float = settings["RetryDelaySeconds"]
 
     for attempt in range(1, retries + 1):
-        logger.info(f"Downloading..." + (f" (attempt {attempt}/{retries})" if attempt > 1 else ""))
+        logger.info("Downloading..." + (f" (attempt {attempt}/{retries})" if attempt > 1 else ""))
 
         success, msg = dl.download(url, link_output)
 
@@ -74,7 +74,7 @@ def process_link(url: str, index: int, total: int, output_dir: Path, retries: in
 
         if attempt < retries:
             logger.error(f"Attempt {attempt} failed: {msg} — retrying...")
-            time.sleep(2)  # Brief pause before retry
+            time.sleep(retry_delay)
         else:
             logger.error(f"Failed after {retries} attempts: {msg}")
 
@@ -82,27 +82,37 @@ def process_link(url: str, index: int, total: int, output_dir: Path, retries: in
 
 
 def main() -> int:
+    default_input = settings["InputPath"]
+    default_output = Path(settings["OutputDirPath"])
+    default_retries = settings["Retries"]
+
     parser = argparse.ArgumentParser(
         description="Download files from a link list (GoFile, MEGA, Google Drive).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"
+            "  python downloader.py\n"
             "  python downloader.py links.txt\n"
             "  python downloader.py links.txt -o E:\\downloads --retries 5\n"
         ),
     )
-    parser.add_argument("input_file", help="Text file containing download links (one per line)")
+    parser.add_argument(
+        "input_file",
+        nargs="?",
+        default=default_input,
+        help=f"Text file containing download links (default: {default_input})",
+    )
     parser.add_argument(
         "-o", "--output",
         type=Path,
-        default=DEFAULT_OUTPUT,
-        help=f"Output directory for downloaded files (default: {DEFAULT_OUTPUT})",
+        default=default_output,
+        help=f"Output directory for downloaded files (default: {default_output})",
     )
     parser.add_argument(
         "--retries",
         type=int,
-        default=DEFAULT_RETRIES,
-        help=f"Number of retries on failure (default: {DEFAULT_RETRIES})",
+        default=default_retries,
+        help=f"Number of retries on failure (default: {default_retries})",
     )
     args = parser.parse_args()
 

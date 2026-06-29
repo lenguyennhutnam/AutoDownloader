@@ -1,0 +1,10 @@
+{
+    "InputPath": "./inputLinks.txt",
+    "OutputDirPath": "./downloads",
+    "Retries": 3,
+    "RetryDelaySeconds": 2,
+    "Mega": {
+        "TimeoutSeconds": 600,
+        "ServerStartupWaitSeconds": 3
+    }
+}
