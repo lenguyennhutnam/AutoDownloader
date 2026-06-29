@@ -1,0 +1,11 @@
+23:54:12 INFO  Processing mega link: https://gofile.io/d/testfake123
+23:54:13 INFO  Starting mega-get → E:\H1nam\M_n\GOME_AUTO\temp\mega\testfake123
+23:54:13 INFO  [mega-get] [2026-06-29_16-54-13.181433 cmd ERR  Not logged in.]
+23:54:13 ERROR Failed: https://gofile.io/d/testfake123
+Traceback (most recent call last):
+  File "E:\H1nam\M_n\gome_auto.py", line 410, in process_item
+    files = download_gofile(item) if item.kind == "gofile" else download_mega(item)
+                                                                ^^^^^^^^^^^^^^^^^^^
+  File "E:\H1nam\M_n\gome_auto.py", line 220, in download_mega
+    raise RuntimeError(f"mega-get exited with code {process.returncode}")
+RuntimeError: mega-get exited with code 57

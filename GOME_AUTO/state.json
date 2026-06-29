@@ -1,0 +1,16 @@
+{
+  "links": {
+    "https://gofile.io/d/testfake123": {
+      "url": "https://gofile.io/d/testfake123",
+      "kind": "mega",
+      "status": "failed",
+      "attempts": 1,
+      "message_id": null,
+      "discovered_at": 1782752052.4257245,
+      "updated_at": 1782752053.1857255,
+      "files": [],
+      "parts_dir": null,
+      "error": "mega-get exited with code 57"
+    }
+  }
+}
