@@ -11,7 +11,7 @@ _DEFAULTS: dict = {
     "Retries": 3,
     "RetryDelaySeconds": 2,
     "Mega": {
-        "TimeoutSeconds": 600,
+        "StallTimeoutSeconds": 300,
         "ServerStartupWaitSeconds": 3,
     },
 }

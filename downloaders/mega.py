@@ -6,15 +6,65 @@ Cross-platform: finds mega-get binary with shutil.which().
 import re
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from .base import BaseDownloader
+from utils import logger
 from utils.settings import settings
 
 _MEGA_RE = re.compile(
     r"https?://mega\.nz/(file|folder)/[^\s\"'<>]+", re.IGNORECASE
 )
+
+# How often the stall watchdog checks whether bytes are still arriving.
+_POLL_SECONDS = 1.0
+
+
+def _parse_pct(line: str) -> float | None:
+    """Extract the percent value from a mega-get TRANSFERRING progress line."""
+    if "TRANSFERRING" not in line or "%" not in line:
+        return None
+    try:
+        return float(line.split("(")[1].split("%")[0].strip().split()[-1])
+    except (IndexError, ValueError):
+        return None
+
+
+def _stream_progress(stream, state: dict) -> None:
+    """Log download progress from mega-get output.
+
+    mega-get redraws its progress line with carriage returns and only
+    prints a newline at the end, so a line-based read would block until
+    the download finishes — read char-wise and split on both \\r and \\n.
+    """
+    buffer: list[str] = []
+    while True:
+        char = stream.read(1)
+        if not char:
+            break
+        if char not in "\r\n":
+            buffer.append(char)
+            continue
+        line = "".join(buffer).strip()
+        buffer.clear()
+        pct = _parse_pct(line)
+        if pct is not None and pct - state["last_pct"] >= 5.0:
+            logger.info(f"Progress: {pct:.0f}%")
+            state["last_pct"] = pct
+
+
+def _dir_bytes(root: Path) -> int:
+    """Total size of all files under *root* (transfer temp files included)."""
+    total = 0
+    for path in root.rglob("*"):
+        try:
+            if path.is_file():
+                total += path.stat().st_size
+        except OSError:
+            continue  # file may vanish mid-scan
+    return total
 
 
 def _find_mega_get() -> str | None:
@@ -95,6 +145,7 @@ class MegaDownloader(BaseDownloader):
         if mega_logout:
             subprocess.run([mega_logout], capture_output=True, text=True)
 
+        stall_timeout = settings["Mega"]["StallTimeoutSeconds"]
         try:
             process = subprocess.Popen(
                 [mega_get, url, str(output_dir)],
@@ -104,23 +155,36 @@ class MegaDownloader(BaseDownloader):
                 bufsize=1,
             )
 
-            # Stream output for progress info
-            last_pct = -1.0
-            for line in process.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                if "TRANSFERRING" in line and "%" in line:
-                    try:
-                        pct = float(line.split("(")[1].split("%")[0].strip().split()[-1])
-                        if pct - last_pct >= 5.0:
-                            from utils import logger
-                            logger.info(f"Progress: {pct:.0f}%")
-                            last_pct = pct
-                    except Exception:
-                        pass
+            state = {"last_pct": -1.0}
+            reader = threading.Thread(
+                target=_stream_progress, args=(process.stdout, state), daemon=True
+            )
+            reader.start()
 
-            process.wait()
+            # Stall watchdog: fail the link when no bytes arrive for
+            # stall_timeout seconds (quota exceeded, dead connection...)
+            # instead of sitting on a frozen transfer forever.
+            last_bytes = _dir_bytes(output_dir)
+            last_activity = time.monotonic()
+            while process.poll() is None:
+                time.sleep(_POLL_SECONDS)
+                current = _dir_bytes(output_dir)
+                if current != last_bytes:
+                    last_bytes = current
+                    last_activity = time.monotonic()
+                elif time.monotonic() - last_activity > stall_timeout:
+                    process.kill()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    # Keep .getxfer resume data so a retry continues the
+                    # transfer instead of starting over from zero.
+                    return False, (
+                        f"transfer stalled: no data received for {stall_timeout}s "
+                        "(quota exceeded or connection lost) — partial kept, rerun to resume"
+                    )
+
             if process.returncode != 0:
                 self._cleanup_partial(output_dir, before)
                 return False, f"mega-get exited with code {process.returncode}"
@@ -133,10 +197,6 @@ class MegaDownloader(BaseDownloader):
                 process.kill()
             self._cleanup_partial(output_dir, before)
             raise
-        except subprocess.TimeoutExpired:
-            process.kill()
-            self._cleanup_partial(output_dir, before)
-            return False, f"Timed out after {settings['Mega']['TimeoutSeconds']}s"
         except Exception as e:
             self._cleanup_partial(output_dir, before)
             return False, f"Download error: {e}"
