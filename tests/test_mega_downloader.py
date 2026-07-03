@@ -9,12 +9,15 @@ stdout/stderr are discarded entirely (DEVNULL).
 """
 
 import time
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
 
 import downloaders.mega as mega
-from downloaders.mega import MegaDownloader, _dir_bytes
+from downloaders.mega import MegaDownloader, _describe_exit_code, _dir_bytes
+
+_Usage = namedtuple("usage", "total used free")
 
 
 def test_dir_bytes_sums_all_files(tmp_path: Path):
@@ -156,3 +159,101 @@ def test_progress_report_logs_growth(tmp_path: Path, monkeypatch: pytest.MonkeyP
     MegaDownloader().download("https://mega.nz/file/x#k", out)
 
     assert any("Downloaded so far" in msg for msg in logged)
+
+
+# --- exit code descriptions ---
+
+
+def test_describe_exit_code_known_access_denied(monkeypatch: pytest.MonkeyPatch):
+    """Code 11 must explain quota/rate-limit without needing mega-errorcode."""
+    monkeypatch.setattr(mega, "_find_mega_binary", lambda name: None)
+    desc = _describe_exit_code(11)
+    assert "Access denied" in desc
+    assert "quota" in desc.lower()
+
+
+def test_describe_exit_code_ctrl_c(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(mega, "_find_mega_binary", lambda name: None)
+    assert "Ctrl+C" in _describe_exit_code(3221225786)  # 0xC000013A
+
+
+def test_describe_exit_code_queries_mega_errorcode(monkeypatch: pytest.MonkeyPatch):
+    """Unknown codes are looked up via the mega-errorcode CLI at runtime."""
+    monkeypatch.setattr(mega, "_find_mega_binary", lambda name: "mega-errorcode")
+
+    class Result:
+        stdout = "Insufficient disk space\n"
+        stderr = ""
+
+    monkeypatch.setattr(mega.subprocess, "run", lambda *a, **kw: Result())
+    assert _describe_exit_code(13) == "Insufficient disk space"
+
+
+def test_describe_exit_code_unknown_fallback(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(mega, "_find_mega_binary", lambda name: None)
+    assert _describe_exit_code(9999) == "unknown error"
+
+
+def test_exit_code_failure_message_includes_description(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    fake = FakePopen(returncode=11)
+    _patch_environment(monkeypatch, fake)
+    monkeypatch.setattr(mega, "_find_mega_binary", lambda name: None)
+    out = tmp_path / "out"
+    out.mkdir()
+
+    ok, msg = MegaDownloader().download("https://mega.nz/file/x#k", out)
+
+    assert ok is False
+    assert "code 11" in msg
+    assert "Access denied" in msg
+
+
+# --- disk space pre-check ---
+
+
+def test_insufficient_disk_fails_fast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Below MinFreeDiskGB the download must fail before mega-get even starts."""
+    popen_calls = []
+    monkeypatch.setattr(mega, "_find_mega_get", lambda: "mega-get")
+    monkeypatch.setattr(mega, "_find_mega_logout", lambda: None)
+    monkeypatch.setattr(mega, "_ensure_mega_server", lambda: None)
+    monkeypatch.setattr(
+        mega.subprocess, "Popen", lambda *a, **kw: popen_calls.append(a) or FakePopen(0)
+    )
+    monkeypatch.setattr(
+        mega.shutil, "disk_usage", lambda p: _Usage(100 * 1024**3, 99 * 1024**3, 1 * 1024**3)
+    )
+    monkeypatch.setitem(mega.settings["Mega"], "MinFreeDiskGB", 5)
+
+    ok, msg = MegaDownloader().download("https://mega.nz/file/x#k", tmp_path / "out")
+
+    assert ok is False
+    assert "disk space" in msg.lower()
+    assert popen_calls == []  # never started the transfer
+
+
+def test_enough_disk_proceeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    out = tmp_path / "out"
+
+    class SucceedingPopen(FakePopen):
+        def __init__(self):
+            super().__init__(returncode=0)
+            out.mkdir(exist_ok=True)
+            (out / "movie.mp4").write_bytes(b"x" * 100)
+
+    monkeypatch.setattr(mega, "_find_mega_get", lambda: "mega-get")
+    monkeypatch.setattr(mega, "_find_mega_logout", lambda: None)
+    monkeypatch.setattr(mega, "_ensure_mega_server", lambda: None)
+    monkeypatch.setattr(mega.subprocess, "Popen", lambda *a, **kw: SucceedingPopen())
+    monkeypatch.setattr(mega, "_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(
+        mega.shutil, "disk_usage", lambda p: _Usage(100 * 1024**3, 50 * 1024**3, 50 * 1024**3)
+    )
+    monkeypatch.setitem(mega.settings["Mega"], "MinFreeDiskGB", 5)
+    monkeypatch.setitem(mega.settings["Mega"], "StallTimeoutSeconds", 5)
+
+    ok, msg = MegaDownloader().download("https://mega.nz/file/x#k", out)
+
+    assert ok is True

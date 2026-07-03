@@ -4,8 +4,9 @@
     "Retries": 3,
     "RetryDelaySeconds": 2,
     "Mega": {
-        "StallTimeoutSeconds": 300,
-        "ServerStartupWaitSeconds": 3
+        "StallTimeoutSeconds": 60,
+        "ServerStartupWaitSeconds": 3,
+        "MinFreeDiskGB": 5
     },
     "Telegram": {
         "Channel": "crabfast",

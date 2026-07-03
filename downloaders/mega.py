@@ -36,33 +36,63 @@ def _dir_bytes(root: Path) -> int:
     return total
 
 
-def _find_mega_get() -> str | None:
-    """Locate the mega-get binary cross-platform."""
-    found = shutil.which("mega-get")
+def _find_mega_binary(base: str) -> str | None:
+    """Locate a MEGAcmd client binary (e.g. 'mega-get') cross-platform."""
+    found = shutil.which(base)
     if found:
         return found
 
     # Fallback: common Windows install location
     home_local = Path.home() / "AppData" / "Local" / "MEGAcmd"
-    for candidate in ("mega-get.bat", "mega-get.exe", "mega-get"):
+    for candidate in (f"{base}.bat", f"{base}.exe", base):
         path = home_local / candidate
         if path.is_file():
             return str(path)
 
     return None
+
+
+def _find_mega_get() -> str | None:
+    """Locate the mega-get binary cross-platform."""
+    return _find_mega_binary("mega-get")
 
 
 def _find_mega_logout() -> str | None:
     """Locate mega-logout for session cleanup."""
-    found = shutil.which("mega-logout")
-    if found:
-        return found
-    home_local = Path.home() / "AppData" / "Local" / "MEGAcmd"
-    for candidate in ("mega-logout.bat", "mega-logout.exe", "mega-logout"):
-        path = home_local / candidate
-        if path.is_file():
-            return str(path)
-    return None
+    return _find_mega_binary("mega-logout")
+
+
+# Exit codes worth a hand-written explanation. 11 is by far the most
+# common in practice; 0xC000013A is Windows' "killed by Ctrl+C/console close".
+_KNOWN_EXIT_CODES = {
+    11: (
+        "Access denied — MEGA transfer quota/rate-limit exceeded for this IP "
+        "or the link was taken down; wait a few hours and rerun to retry"
+    ),
+    3221225786: "terminated by user (Ctrl+C / console closed)",
+}
+
+
+def _describe_exit_code(code: int) -> str:
+    """Human-readable explanation for a mega-get exit code.
+
+    Known codes get a curated message; anything else is looked up via the
+    mega-errorcode CLI that ships with MEGAcmd.
+    """
+    if code in _KNOWN_EXIT_CODES:
+        return _KNOWN_EXIT_CODES[code]
+    tool = _find_mega_binary("mega-errorcode")
+    if tool:
+        try:
+            result = subprocess.run(
+                [tool, str(code)], capture_output=True, text=True, timeout=10
+            )
+            description = (result.stdout or "").strip()
+            if description:
+                return description
+        except Exception:
+            pass
+    return "unknown error"
 
 
 def _ensure_mega_server() -> None:
@@ -106,6 +136,17 @@ class MegaDownloader(BaseDownloader):
             return False, "MEGAcmd is not installed"
 
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Fail fast when the disk is nearly full — a 10+ GB transfer that
+        # dies at 99% wastes hours of bandwidth and MEGA quota.
+        min_free_gb = settings["Mega"]["MinFreeDiskGB"]
+        free_gb = shutil.disk_usage(output_dir).free / 1024**3
+        if free_gb < min_free_gb:
+            return False, (
+                f"insufficient disk space: {free_gb:.1f} GB free "
+                f"(minimum {min_free_gb} GB) — free up space or change OutputDirPath"
+            )
+
         before = {p.resolve() for p in output_dir.rglob("*") if p.is_file()}
 
         # Ensure server is running & logout stale sessions
@@ -154,7 +195,10 @@ class MegaDownloader(BaseDownloader):
 
             if process.returncode != 0:
                 self._cleanup_partial(output_dir, before)
-                return False, f"mega-get exited with code {process.returncode}"
+                description = _describe_exit_code(process.returncode)
+                return False, (
+                    f"mega-get exited with code {process.returncode}: {description}"
+                )
 
         except KeyboardInterrupt:
             process.terminate()
