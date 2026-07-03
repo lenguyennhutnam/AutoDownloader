@@ -13,6 +13,7 @@ _DEFAULTS: dict = {
     "Mega": {
         "StallTimeoutSeconds": 300,
         "ServerStartupWaitSeconds": 3,
+        "MinFreeDiskGB": 5,
     },
 }
 
