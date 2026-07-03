@@ -20,15 +20,18 @@ Tool cào tất cả tin nhắn từ một kênh Telegram (tin nhắn chứa lin
 ## Kiến trúc
 
 ```
-telefetch.py                # Entry point CLI (argparse)
 telefetch/
 ├── __init__.py
+├── __main__.py             # Entry point: python -m telefetch
+├── cli.py                  # argparse + async main flow
 ├── config.py               # Load section "Telegram" từ config/setting.json + secrets từ .env
 ├── state.py                # LinkState dataclass + JSON store (trạng thái từng link)
 ├── scraper.py              # Telethon: quét toàn bộ lịch sử + listener realtime
 ├── processor.py            # Orchestrate: download → nén → split → update state
 └── archiver.py             # Nén zip + split part độc lập (stdlib zipfile)
 ```
+
+> Không tạo `telefetch.py` ở root — file đó sẽ shadow package `telefetch/` khi import.
 
 **Reuse:**
 - `downloaders/registry.py` — dispatch URL → downloader (GoFile, MEGA, Google Drive)
@@ -120,10 +123,10 @@ Thêm vào `requirements.txt`: `telethon>=1.36,<2` — bắt buộc, Bot API kh�
 ## CLI
 
 ```bash
-python telefetch.py                  # quét backlog + listen realtime
-python telefetch.py --once           # quét backlog rồi thoát
-python telefetch.py --skip-failed    # không retry link failed
-python telefetch.py --keep-original  # override config, giữ file gốc
+python -m telefetch                  # quét backlog + listen realtime
+python -m telefetch --once           # quét backlog rồi thoát
+python -m telefetch --skip-failed    # không retry link failed
+python -m telefetch --keep-original  # override config, giữ file gốc
 ```
 
 ## Testing
