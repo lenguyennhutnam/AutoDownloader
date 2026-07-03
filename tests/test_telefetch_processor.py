@@ -36,7 +36,9 @@ class FakeDownloader:
         return True, "downloaded"
 
 
-def make_cfg(tmp_path: Path, keep_original: bool = False) -> TelegramConfig:
+def make_cfg(
+    tmp_path: Path, keep_original: bool = False, archive_format: str = "zip"
+) -> TelegramConfig:
     return TelegramConfig(
         api_id=1,
         api_hash="h",
@@ -44,6 +46,8 @@ def make_cfg(tmp_path: Path, keep_original: bool = False) -> TelegramConfig:
         output_dir=tmp_path / "out",
         split_size_bytes=1024**3,
         compression="stored",
+        archive_format=archive_format,
+        rar_path="",
         keep_original=keep_original,
         session_path=tmp_path / "out" / "session",
     )

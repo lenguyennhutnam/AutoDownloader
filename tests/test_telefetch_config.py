@@ -18,8 +18,10 @@ def test_load_config_happy_path(tmp_path: Path):
     assert cfg.api_id == 12345
     assert cfg.api_hash == "abcdef"
     assert cfg.channel == "mychannel"
-    assert cfg.split_size_bytes == 1 * 1024**3          # default 1 GB
+    assert cfg.split_size_bytes == 2 * 1024**3          # default 2 GB
     assert cfg.compression == "stored"
+    assert cfg.archive_format == "rar"                   # default format
+    assert cfg.rar_path == ""
     assert cfg.keep_original is False
     assert cfg.output_dir == tmp_path / "telefetch_data"
     assert cfg.output_dir.is_dir()                       # created on load
@@ -54,6 +56,15 @@ def test_invalid_compression_raises(tmp_path: Path):
         )
 
 
+def test_invalid_archive_format_raises(tmp_path: Path):
+    with pytest.raises(ConfigError, match="ArchiveFormat"):
+        load_config(
+            project_root=tmp_path,
+            telegram_settings={"Channel": "c", "ArchiveFormat": "7z"},
+            env=VALID_ENV,
+        )
+
+
 def test_env_file_parsing(tmp_path: Path):
     (tmp_path / ".env").write_text(
         "# comment\nTELEGRAM_API_ID=999\nTELEGRAM_API_HASH='hash'\n\n", encoding="utf-8"
@@ -65,5 +76,6 @@ def test_env_file_parsing(tmp_path: Path):
 
 def test_defaults_dict_has_pascal_case_keys():
     assert set(TELEFETCH_DEFAULTS) == {
-        "Channel", "OutputDirPath", "SplitSizeGB", "Compression", "KeepOriginal", "SessionPath",
+        "Channel", "OutputDirPath", "SplitSizeGB", "Compression", "KeepOriginal",
+        "SessionPath", "ArchiveFormat", "RarPath",
     }
