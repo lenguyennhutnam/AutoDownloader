@@ -4,7 +4,7 @@ import shutil
 from pathlib import Path
 
 from downloaders.registry import get_downloader
-from telefetch.archiver import archive_files, safe_name
+from telefetch.archiver import archive_files, archive_files_rar, find_rar_binary, safe_name
 from telefetch.config import TelegramConfig
 from telefetch.state import LinkState, LinkStore
 from utils import logger
@@ -13,6 +13,52 @@ from utils import logger
 def _link_key(url: str) -> str:
     """Derive a stable directory/file stem from the URL's last path segment."""
     return safe_name(url.rstrip("/").rsplit("/", 1)[-1])
+
+
+def _content_name(work_dir: Path, files: list[Path]) -> str:
+    """Pick a human-meaningful archive name from the downloaded content.
+
+    Priority: single file -> its stem; single top-level folder -> folder
+    name; multiple loose files -> stem of the largest one.
+    """
+    if len(files) == 1:
+        return safe_name(files[0].stem)
+    top = list(work_dir.iterdir())
+    if len(top) == 1 and top[0].is_dir():
+        return safe_name(top[0].name)
+    largest = max(files, key=lambda p: p.stat().st_size)
+    return safe_name(largest.stem)
+
+
+def _make_archives(
+    files: list[Path], work_dir: Path, archive_dir: Path, base_name: str, cfg: TelegramConfig
+) -> list[Path]:
+    """Create archives in the configured format (rar or zip)."""
+    if cfg.archive_format == "rar":
+        rar_binary = find_rar_binary(cfg.rar_path)
+        if rar_binary is None:
+            raise RuntimeError(
+                "rar binary not found — install WinRAR (Windows) or "
+                "`sudo apt install rar` (Ubuntu), or set Telegram.RarPath "
+                "in config/setting.json"
+            )
+        return archive_files_rar(
+            files,
+            base_dir=work_dir,
+            out_dir=archive_dir,
+            base_name=base_name,
+            limit_bytes=cfg.split_size_bytes,
+            compression=cfg.compression,
+            rar_binary=rar_binary,
+        )
+    return archive_files(
+        files,
+        base_dir=work_dir,
+        out_dir=archive_dir,
+        base_name=base_name,
+        limit_bytes=cfg.split_size_bytes,
+        compression=cfg.compression,
+    )
 
 
 def _collect_files(root: Path) -> list[Path]:
@@ -65,21 +111,15 @@ def process_link(store: LinkStore, item: LinkState, cfg: TelegramConfig) -> bool
         store.update(item, "compressing")
         logger.info(f"Compressing {len(files)} file(s)...")
         archive_dir = cfg.output_dir / "archives" / key
-        zips = archive_files(
-            files,
-            base_dir=work_dir,
-            out_dir=archive_dir,
-            base_name=key,
-            limit_bytes=cfg.split_size_bytes,
-            compression=cfg.compression,
-        )
+        base_name = _content_name(work_dir, files)
+        archives = _make_archives(files, work_dir, archive_dir, base_name, cfg)
 
         if not cfg.keep_original:
             shutil.rmtree(work_dir, ignore_errors=True)
 
-        item.files = [str(p) for p in zips]
+        item.files = [str(p) for p in archives]
         store.update(item, "done")
-        logger.done(f"→ {len(zips)} archive(s) in {archive_dir}")
+        logger.done(f"→ {len(archives)} archive(s) in {archive_dir}")
         return True
     except KeyboardInterrupt:
         # Reset so the next run retries this link, then propagate.

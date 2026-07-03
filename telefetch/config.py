@@ -9,13 +9,16 @@ from utils.settings import _deep_merge, settings
 TELEFETCH_DEFAULTS: dict = {
     "Channel": "",
     "OutputDirPath": "./telefetch_data",
-    "SplitSizeGB": 1,
+    "SplitSizeGB": 2,
     "Compression": "stored",
+    "ArchiveFormat": "rar",
+    "RarPath": "",
     "KeepOriginal": False,
     "SessionPath": "./telefetch_data/session",
 }
 
 _VALID_COMPRESSION = {"stored", "deflated"}
+_VALID_FORMATS = {"rar", "zip"}
 
 
 class ConfigError(Exception):
@@ -32,6 +35,8 @@ class TelegramConfig:
     output_dir: Path
     split_size_bytes: int
     compression: str
+    archive_format: str
+    rar_path: str
     keep_original: bool
     session_path: Path
 
@@ -98,6 +103,11 @@ def load_config(
             f"Telegram.Compression must be one of {sorted(_VALID_COMPRESSION)}, "
             f"got: {merged['Compression']!r}"
         )
+    if merged["ArchiveFormat"] not in _VALID_FORMATS:
+        raise ConfigError(
+            f"Telegram.ArchiveFormat must be one of {sorted(_VALID_FORMATS)}, "
+            f"got: {merged['ArchiveFormat']!r}"
+        )
 
     output_dir = _resolve_dir(root, merged["OutputDirPath"])
     session_path = _resolve_dir(root, merged["SessionPath"])
@@ -111,6 +121,8 @@ def load_config(
         output_dir=output_dir,
         split_size_bytes=int(float(merged["SplitSizeGB"]) * 1024**3),
         compression=merged["Compression"],
+        archive_format=merged["ArchiveFormat"],
+        rar_path=str(merged["RarPath"]),
         keep_original=bool(merged["KeepOriginal"]),
         session_path=session_path,
     )

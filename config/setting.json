@@ -10,8 +10,10 @@
     "Telegram": {
         "Channel": "crabfast",
         "OutputDirPath": "./telefetch_data",
-        "SplitSizeGB": 1,
+        "SplitSizeGB": 2,
         "Compression": "stored",
+        "ArchiveFormat": "rar",
+        "RarPath": "",
         "KeepOriginal": false,
         "SessionPath": "./telefetch_data/session"
     }
