@@ -6,5 +6,13 @@
     "Mega": {
         "TimeoutSeconds": 600,
         "ServerStartupWaitSeconds": 3
+    },
+    "Telegram": {
+        "Channel": "crabfast",
+        "OutputDirPath": "./telefetch_data",
+        "SplitSizeGB": 1,
+        "Compression": "stored",
+        "KeepOriginal": false,
+        "SessionPath": "./telefetch_data/session"
     }
 }
