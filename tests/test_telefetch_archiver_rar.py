@@ -100,7 +100,36 @@ def test_archive_files_rar_chunks_oversized_file(tmp_path: Path, monkeypatch: py
     )
 
     assert len(rars) == 3  # one independent rar per raw chunk (+ manifest rides along)
-    assert not (base / "_chunks").exists()  # staging cleaned up
+    assert not (base / "_staging").exists()  # staging cleaned up
+
+
+def test_archive_files_rar_extracted_content_uses_staging_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Extracted archive contents are rar'ed from the staging dir so member
+    paths inside the archive start at the source archive's stem."""
+    import zipfile
+
+    fake_run = FakeRun()
+    monkeypatch.setattr(archiver.subprocess, "run", fake_run)
+    base = tmp_path / "work"
+    base.mkdir(parents=True)
+    inner = tmp_path / "payload"
+    files = [write_file(inner / f"d{i}.bin", 40 * KB) for i in range(5)]
+    big_zip = base / "Game.zip"
+    with zipfile.ZipFile(big_zip, "w", compression=zipfile.ZIP_STORED) as zf:
+        for f in files:
+            zf.write(f, f.name)
+
+    archive_files_rar(
+        [big_zip], base, tmp_path / "out", "Game", limit_bytes=100 * KB,
+        compression="stored", rar_binary="rar",
+    )
+
+    staging = base / "_staging"
+    assert all(c["cwd"] == staging for c in fake_run.calls)
+    member_args = [a for c in fake_run.calls for a in c["cmd"] if a.endswith(".bin")]
+    assert all(a.replace("\\", "/").startswith("Game/") for a in member_args)
 
 
 def test_archive_files_rar_error_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
