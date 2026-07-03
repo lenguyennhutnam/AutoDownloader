@@ -1,53 +1,33 @@
-"""Tests for downloaders.mega progress parsing and the stall watchdog."""
+"""Tests for downloaders.mega: the stall watchdog and disk-based progress.
 
-import io
+mega-get's own stdout progress display was found (empirically, via a raw
+capture during a real transfer) to be fully buffered when piped — it
+delivers almost nothing in real time and can dump stale output in one
+burst on exit. Progress is tracked from bytes written to disk instead
+(the same signal the stall watchdog already relies on), and mega-get's
+stdout/stderr are discarded entirely (DEVNULL).
+"""
+
 import time
 from pathlib import Path
 
 import pytest
 
 import downloaders.mega as mega
-from downloaders.mega import MegaDownloader, _parse_pct, _stream_progress
+from downloaders.mega import MegaDownloader, _dir_bytes
 
 
-# --- progress parsing ---
-
-
-def test_parse_pct_transferring_line():
-    line = "TRANSFERRING ||##########----------||(2048.00/11510.00 MB:  17.80 %)"
-    assert _parse_pct(line) == pytest.approx(17.80)
-
-
-def test_parse_pct_ignores_other_lines():
-    assert _parse_pct("Fetching nodes...") is None
-    assert _parse_pct("") is None
-
-
-def test_stream_progress_handles_carriage_returns(monkeypatch: pytest.MonkeyPatch):
-    """mega-get rewrites its progress line with \\r — the reader must split on it."""
-    logged: list[str] = []
-    monkeypatch.setattr(mega.logger, "info", lambda msg: logged.append(msg))
-    stream = io.StringIO(
-        "TRANSFERRING ||#---||(100.00/1000.00 MB:  10.00 %)\r"
-        "TRANSFERRING ||##--||(200.00/1000.00 MB:  20.00 %)\r"
-        "TRANSFERRING ||####||(1000.00/1000.00 MB: 100.00 %)\n"
-    )
-    state = {"last_pct": -1.0}
-
-    _stream_progress(stream, state)
-
-    assert state["last_pct"] == pytest.approx(100.0)
-    assert len(logged) == 3  # 10 -> 20 -> 100, all >= 5% steps
-
-
-# --- stall watchdog ---
+def test_dir_bytes_sums_all_files(tmp_path: Path):
+    (tmp_path / "a.bin").write_bytes(b"x" * 100)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "b.bin").write_bytes(b"y" * 50)
+    assert _dir_bytes(tmp_path) == 150
 
 
 class FakePopen:
     """Stand-in for the mega-get process."""
 
     def __init__(self, returncode: int | None = None):
-        self.stdout = io.StringIO("")
         self._rc = returncode
         self.killed = False
 
@@ -76,6 +56,32 @@ def _patch_environment(monkeypatch: pytest.MonkeyPatch, fake: FakePopen):
     monkeypatch.setattr(mega.subprocess, "Popen", lambda *a, **kw: fake)
     monkeypatch.setattr(mega, "_POLL_SECONDS", 0.01)
     monkeypatch.setitem(mega.settings["Mega"], "StallTimeoutSeconds", 0.05)
+
+
+def test_popen_never_pipes_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """mega-get's stdout must be discarded, not captured/parsed."""
+    fake = FakePopen(returncode=0)
+    calls = []
+    monkeypatch.setattr(mega, "_find_mega_get", lambda: "mega-get")
+    monkeypatch.setattr(mega, "_find_mega_logout", lambda: None)
+    monkeypatch.setattr(mega, "_ensure_mega_server", lambda: None)
+
+    def fake_popen(*args, **kwargs):
+        calls.append(kwargs)
+        return fake
+
+    monkeypatch.setattr(mega.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(mega, "_POLL_SECONDS", 0.01)
+    monkeypatch.setitem(mega.settings["Mega"], "StallTimeoutSeconds", 5)
+
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "movie.mp4").write_bytes(b"x" * 100)
+
+    MegaDownloader().download("https://mega.nz/file/x#k", out)
+
+    assert calls[0]["stdout"] is mega.subprocess.DEVNULL
+    assert calls[0]["stderr"] is mega.subprocess.DEVNULL
 
 
 def test_stall_watchdog_kills_and_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
@@ -116,3 +122,37 @@ def test_download_success_when_files_appear(tmp_path: Path, monkeypatch: pytest.
 
     assert ok is True
     assert "movie.mp4" in msg
+
+
+def test_progress_report_logs_growth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """While bytes keep growing, a periodic 'downloaded so far' line is logged."""
+    out = tmp_path / "out"
+    out.mkdir()
+    partial = out / ".getxfer.1.mega"
+    growth_steps = iter([10, 20, 30, 30, 30])  # last two ticks: no growth, then poll() ends it
+
+    class GrowingPopen(FakePopen):
+        def __init__(self):
+            super().__init__(returncode=None)
+            self._left = 4  # finish after a few polls
+
+        def poll(self):
+            partial.write_bytes(b"x" * next(growth_steps, 30))
+            self._left -= 1
+            if self._left <= 0:
+                self._rc = 0
+            return self._rc
+
+    logged: list[str] = []
+    monkeypatch.setattr(mega.logger, "info", lambda msg: logged.append(msg))
+    monkeypatch.setattr(mega, "_find_mega_get", lambda: "mega-get")
+    monkeypatch.setattr(mega, "_find_mega_logout", lambda: None)
+    monkeypatch.setattr(mega, "_ensure_mega_server", lambda: None)
+    monkeypatch.setattr(mega.subprocess, "Popen", lambda *a, **kw: GrowingPopen())
+    monkeypatch.setattr(mega, "_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(mega, "_REPORT_SECONDS", 0.0)  # report on every growth tick
+    monkeypatch.setitem(mega.settings["Mega"], "StallTimeoutSeconds", 5)
+
+    MegaDownloader().download("https://mega.nz/file/x#k", out)
+
+    assert any("Downloaded so far" in msg for msg in logged)
