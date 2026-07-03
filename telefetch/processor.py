@@ -5,7 +5,7 @@ from pathlib import Path
 
 from downloaders.registry import get_downloader
 from telefetch.archiver import archive_files, archive_files_rar, find_rar_binary, safe_name
-from telefetch.config import TelegramConfig
+from telefetch.config import DownloadConfig
 from telefetch.state import LinkState, LinkStore
 from utils import logger
 
@@ -31,7 +31,7 @@ def _content_name(work_dir: Path, files: list[Path]) -> str:
 
 
 def _make_archives(
-    files: list[Path], work_dir: Path, archive_dir: Path, base_name: str, cfg: TelegramConfig
+    files: list[Path], work_dir: Path, archive_dir: Path, base_name: str, cfg: DownloadConfig
 ) -> list[Path]:
     """Create archives in the configured format (rar or zip)."""
     if cfg.archive_format == "rar":
@@ -70,7 +70,7 @@ def _collect_files(root: Path) -> list[Path]:
     )
 
 
-def process_link(store: LinkStore, item: LinkState, cfg: TelegramConfig) -> bool:
+def process_link(store: LinkStore, item: LinkState, cfg: DownloadConfig) -> bool:
     """Download *item*, compress the result, and update its state.
 
     Never raises except KeyboardInterrupt (state is reset to pending first

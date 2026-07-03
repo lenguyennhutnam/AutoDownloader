@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from telefetch.config import ConfigError, TELEFETCH_DEFAULTS, load_config
+from telefetch.config import ConfigError, DownloadConfig, TELEFETCH_DEFAULTS, load_config, load_download_config
 
 VALID_ENV = {"TELEGRAM_API_ID": "12345", "TELEGRAM_API_HASH": "abcdef"}
 
@@ -79,3 +79,39 @@ def test_defaults_dict_has_pascal_case_keys():
         "Channel", "OutputDirPath", "SplitSizeGB", "Compression", "KeepOriginal",
         "SessionPath", "ArchiveFormat", "RarPath",
     }
+
+
+def test_load_download_config_no_credentials_needed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TELEGRAM_API_ID", raising=False)
+    monkeypatch.delenv("TELEGRAM_API_HASH", raising=False)
+    cfg = load_download_config(project_root=tmp_path, telegram_settings={})
+    assert isinstance(cfg, DownloadConfig)
+    assert cfg.split_size_bytes == 2 * 1024**3
+    assert cfg.compression == "stored"
+    assert cfg.archive_format == "rar"
+    assert cfg.rar_path == ""
+    assert cfg.keep_original is False
+    assert cfg.output_dir == tmp_path / "telefetch_data"
+    assert cfg.output_dir.is_dir()
+
+
+def test_load_download_config_no_env_file_needed(tmp_path: Path):
+    # No .env file exists in tmp_path at all — must not raise or look for one.
+    assert not (tmp_path / ".env").exists()
+    cfg = load_download_config(project_root=tmp_path, telegram_settings={"SplitSizeGB": 3})
+    assert cfg.split_size_bytes == 3 * 1024**3
+
+
+def test_load_download_config_invalid_compression_raises(tmp_path: Path):
+    with pytest.raises(ConfigError, match="Compression"):
+        load_download_config(project_root=tmp_path, telegram_settings={"Compression": "lzma"})
+
+
+def test_load_download_config_invalid_archive_format_raises(tmp_path: Path):
+    with pytest.raises(ConfigError, match="ArchiveFormat"):
+        load_download_config(project_root=tmp_path, telegram_settings={"ArchiveFormat": "7z"})
+
+
+def test_telegram_config_is_a_download_config(tmp_path: Path):
+    cfg = load_config(project_root=tmp_path, telegram_settings={"Channel": "c"}, env=VALID_ENV)
+    assert isinstance(cfg, DownloadConfig)  # inheritance: TelegramConfig IS-A DownloadConfig
