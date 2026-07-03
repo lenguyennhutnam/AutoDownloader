@@ -139,6 +139,8 @@ def test_archive_named_after_single_file(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert processor.process_link(store, item, make_cfg(tmp_path)) is True
     assert Path(item.files[0]).name == "GameX_v1.2.zip"  # file stem + format ext
+    # output folder is named after the content too, not the URL key
+    assert Path(item.files[0]).parent.name == "GameX_v1.2"
 
 
 def test_archive_named_after_single_top_folder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

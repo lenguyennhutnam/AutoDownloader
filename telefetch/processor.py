@@ -58,6 +58,7 @@ def _make_archives(
         base_name=base_name,
         limit_bytes=cfg.split_size_bytes,
         compression=cfg.compression,
+        rar_binary=find_rar_binary(cfg.rar_path),  # extract .rar sources when possible
     )
 
 
@@ -110,8 +111,8 @@ def process_link(store: LinkStore, item: LinkState, cfg: TelegramConfig) -> bool
 
         store.update(item, "compressing")
         logger.info(f"Compressing {len(files)} file(s)...")
-        archive_dir = cfg.output_dir / "archives" / key
         base_name = _content_name(work_dir, files)
+        archive_dir = cfg.output_dir / "archives" / base_name
         archives = _make_archives(files, work_dir, archive_dir, base_name, cfg)
 
         if not cfg.keep_original:

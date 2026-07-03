@@ -91,4 +91,53 @@ def test_archive_files_chunks_oversized_single_file(tmp_path: Path):
     assert any(m.endswith("MANIFEST.json") for m in all_members)
     assert sum(1 for m in all_members if ".chunk" in m) == 3
     # staging dir cleaned up
-    assert not (base / "_chunks").exists()
+    assert not (base / "_staging").exists()
+
+
+def test_archive_files_extracts_oversized_zip_and_repacks(tmp_path: Path):
+    """A downloaded .zip bigger than the limit is extracted and its CONTENTS
+    are packed into independent parts — no raw .chunk members."""
+    base = tmp_path / "work"
+    base.mkdir(parents=True)
+    inner_dir = tmp_path / "payload"
+    inner_files = [write_file(inner_dir / f"data{i}.bin", 40 * KB) for i in range(5)]
+    big_zip = base / "BRADMAX_9900_JUNE.zip"
+    with zipfile.ZipFile(big_zip, "w", compression=zipfile.ZIP_STORED) as zf:
+        for f in inner_files:
+            zf.write(f, f.name)
+    assert big_zip.stat().st_size > 100 * KB  # oversized for this test's limit
+
+    out = tmp_path / "archives"
+    zips = archive_files(
+        [big_zip], base, out, "BRADMAX_9900_JUNE", limit_bytes=100 * KB, compression="stored"
+    )
+
+    all_members: list[str] = []
+    for z in zips:
+        with zipfile.ZipFile(z) as zf:
+            all_members.extend(zf.namelist())
+    # real data files inside, prefixed by the source archive's stem
+    assert sum(1 for m in all_members if m.endswith(".bin")) == 5
+    assert all(m.replace("\\", "/").startswith("BRADMAX_9900_JUNE/") for m in all_members)
+    # no chunk fallback, no staging leftovers
+    assert not any(".chunk" in m for m in all_members)
+    assert not (base / "_staging").exists()
+
+
+def test_archive_files_falls_back_to_chunks_for_corrupt_zip(tmp_path: Path):
+    """An oversized file with .zip extension that cannot be extracted still
+    gets the raw-chunk treatment instead of failing."""
+    base = tmp_path / "work"
+    fake_zip = write_file(base / "broken.zip", 250 * KB)  # not a real zip
+    out = tmp_path / "archives"
+
+    zips = archive_files(
+        [fake_zip], base, out, "broken", limit_bytes=100 * KB, compression="stored"
+    )
+
+    all_members: list[str] = []
+    for z in zips:
+        with zipfile.ZipFile(z) as zf:
+            all_members.extend(zf.namelist())
+    assert sum(1 for m in all_members if ".chunk" in m) == 3
+    assert any(m.endswith("MANIFEST.json") for m in all_members)
