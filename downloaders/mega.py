@@ -6,7 +6,6 @@ Cross-platform: finds mega-get binary with shutil.which().
 import re
 import shutil
 import subprocess
-import threading
 import time
 from pathlib import Path
 
@@ -21,38 +20,8 @@ _MEGA_RE = re.compile(
 # How often the stall watchdog checks whether bytes are still arriving.
 _POLL_SECONDS = 1.0
 
-
-def _parse_pct(line: str) -> float | None:
-    """Extract the percent value from a mega-get TRANSFERRING progress line."""
-    if "TRANSFERRING" not in line or "%" not in line:
-        return None
-    try:
-        return float(line.split("(")[1].split("%")[0].strip().split()[-1])
-    except (IndexError, ValueError):
-        return None
-
-
-def _stream_progress(stream, state: dict) -> None:
-    """Log download progress from mega-get output.
-
-    mega-get redraws its progress line with carriage returns and only
-    prints a newline at the end, so a line-based read would block until
-    the download finishes — read char-wise and split on both \\r and \\n.
-    """
-    buffer: list[str] = []
-    while True:
-        char = stream.read(1)
-        if not char:
-            break
-        if char not in "\r\n":
-            buffer.append(char)
-            continue
-        line = "".join(buffer).strip()
-        buffer.clear()
-        pct = _parse_pct(line)
-        if pct is not None and pct - state["last_pct"] >= 5.0:
-            logger.info(f"Progress: {pct:.0f}%")
-            state["last_pct"] = pct
+# How often to log a "downloaded so far" line while a transfer is active.
+_REPORT_SECONDS = 15.0
 
 
 def _dir_bytes(root: Path) -> int:
@@ -147,29 +116,27 @@ class MegaDownloader(BaseDownloader):
 
         stall_timeout = settings["Mega"]["StallTimeoutSeconds"]
         try:
+            # mega-get's own progress display is fully buffered when its
+            # stdout is piped (not a real console) — empirically verified
+            # to deliver almost nothing in real time, then dump stale
+            # output in one burst on exit. Discard it entirely and track
+            # real progress from bytes actually written to disk instead.
             process = subprocess.Popen(
                 [mega_get, url, str(output_dir)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
 
-            state = {"last_pct": -1.0}
-            reader = threading.Thread(
-                target=_stream_progress, args=(process.stdout, state), daemon=True
-            )
-            reader.start()
-
-            # Stall watchdog: fail the link when no bytes arrive for
-            # stall_timeout seconds (quota exceeded, dead connection...)
-            # instead of sitting on a frozen transfer forever.
             last_bytes = _dir_bytes(output_dir)
             last_activity = time.monotonic()
+            last_report = time.monotonic()
             while process.poll() is None:
                 time.sleep(_POLL_SECONDS)
                 current = _dir_bytes(output_dir)
                 if current != last_bytes:
+                    if time.monotonic() - last_report >= _REPORT_SECONDS:
+                        logger.info(f"Downloaded so far: {current / 1024**3:.2f} GB")
+                        last_report = time.monotonic()
                     last_bytes = current
                     last_activity = time.monotonic()
                 elif time.monotonic() - last_activity > stall_timeout:
